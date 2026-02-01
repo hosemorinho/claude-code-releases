@@ -3,18 +3,19 @@ set -euo pipefail
 
 # Claude Code Installer
 # Downloads Claude Code binary from GitHub releases
-# Supports gh-proxy.org acceleration for China mainland users
+# Supports proxy acceleration for China mainland users
 
 # ============================================================
-# Configuration - CHANGE THIS to your GitHub repo
+# Configuration
 # ============================================================
 GITHUB_REPO="hosemorinho/claude-code-releases"
 INSTALL_DIR="${CLAUDE_INSTALL_DIR:-$HOME/.local/bin}"
-# Build base URLs from parts to prevent gh-proxy.org from
+# Build base URLs from parts to prevent proxy services from
 # rewriting them when serving this script through the proxy
 _GH="github"
 _GITHUB_API="https://api.${_GH}.com"
 _GITHUB_DL="https://${_GH}.com"
+DEFAULT_PROXY="https://gh-proxy.org"
 # ============================================================
 
 RED='\033[0;31m'
@@ -29,39 +30,61 @@ warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 USE_PROXY=false
+PROXY_URL=""
 TARGET_VERSION=""
 
 usage() {
-    cat << EOF
+    cat << 'EOF'
 Usage: install.sh [OPTIONS]
 
 Options:
-    --proxy         Use gh-proxy.org for accelerated download (China mainland)
-    --version VER   Install a specific version (e.g., 2.0.30)
-    --install-dir   Set custom install directory (default: ~/.local/bin)
-    -h, --help      Show this help message
+    --proxy              Use default proxy (gh-proxy.org) for download acceleration
+    --mirror URL         Use a custom mirror/proxy URL for download acceleration
+                         e.g. --mirror https://ghfast.top
+                         e.g. --mirror https://gh-proxy.org
+    --version VER        Install a specific version (e.g., 2.0.30)
+    --install-dir DIR    Set custom install directory (default: ~/.local/bin)
+    -h, --help           Show this help message
+
+Environment variables:
+    CLAUDE_INSTALL_DIR   Custom install directory (same as --install-dir)
+    CLAUDE_MIRROR        Custom mirror URL (same as --mirror)
 
 Examples:
     # Standard install (latest version)
-    curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh | bash
+    bash install.sh
 
-    # China mainland accelerated install
-    curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh | bash -s -- --proxy
+    # Use default proxy (gh-proxy.org)
+    bash install.sh --proxy
 
-    # Install specific version
-    curl -fsSL .../install.sh | bash -s -- --version 2.0.30
+    # Use custom mirror
+    bash install.sh --mirror https://ghfast.top
 
-    # China mainland + specific version
-    curl -fsSL .../install.sh | bash -s -- --proxy --version 2.0.30
+    # Install specific version with proxy
+    bash install.sh --proxy --version 2.0.30
 EOF
 }
 
 parse_args() {
+    # Check environment variable first
+    if [ -n "${CLAUDE_MIRROR:-}" ]; then
+        USE_PROXY=true
+        PROXY_URL="${CLAUDE_MIRROR%/}"
+    fi
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --proxy)
                 USE_PROXY=true
+                if [ -z "$PROXY_URL" ]; then
+                    PROXY_URL="$DEFAULT_PROXY"
+                fi
                 shift
+                ;;
+            --mirror)
+                USE_PROXY=true
+                PROXY_URL="${2%/}"
+                shift 2
                 ;;
             --version)
                 TARGET_VERSION="$2"
@@ -81,6 +104,11 @@ parse_args() {
                 ;;
         esac
     done
+
+    # Set default proxy URL if --proxy was used without --mirror
+    if [ "$USE_PROXY" = true ] && [ -z "$PROXY_URL" ]; then
+        PROXY_URL="$DEFAULT_PROXY"
+    fi
 }
 
 detect_platform() {
@@ -135,7 +163,7 @@ detect_platform() {
 }
 
 auto_detect_china() {
-    # If --proxy is already set, skip detection
+    # If proxy is already set, skip detection
     if [ "$USE_PROXY" = true ]; then
         return
     fi
@@ -152,35 +180,36 @@ auto_detect_china() {
     local lang="${LANG:-}"
 
     if [[ "$tz" == *"Shanghai"* ]] || [[ "$tz" == *"Chongqing"* ]] || [[ "$tz" == "CST"* ]] || [[ "$lang" == zh_CN* ]]; then
-        info "Detected China mainland environment, auto-enabling proxy acceleration"
-        info "You can disable this by setting TZ to a non-China timezone"
+        info "Detected China mainland environment, auto-enabling proxy"
+        info "To disable: set TZ to a non-China timezone, or use --mirror ''"
         USE_PROXY=true
+        PROXY_URL="$DEFAULT_PROXY"
     fi
 }
 
-build_url() {
+# Proxy only for github.com downloads, NOT for api.github.com
+proxy_download_url() {
     local url="$1"
-    if [ "$USE_PROXY" = true ]; then
-        # Avoid double-proxying if URL already contains proxy
-        if [[ "$url" != *"gh-proxy.org"* ]]; then
-            echo "https://gh-proxy.org/${url}"
-        else
-            echo "$url"
-        fi
+    if [ "$USE_PROXY" = true ] && [ -n "$PROXY_URL" ]; then
+        echo "${PROXY_URL}/${url}"
     else
         echo "$url"
     fi
 }
 
 get_latest_version() {
-    local api_url
-    api_url=$(build_url "${_GITHUB_API}/repos/${GITHUB_REPO}/releases/latest")
+    # Always call GitHub API directly (small JSON, works fine without proxy)
+    local api_url="${_GITHUB_API}/repos/${GITHUB_REPO}/releases/latest"
 
     info "Fetching latest version info..."
     local response
     response=$(curl -fsSL "$api_url" 2>/dev/null) || {
-        error "Failed to fetch release info from GitHub"
+        error "Failed to fetch release info from GitHub API"
         error "URL: $api_url"
+        if [ "$USE_PROXY" = true ]; then
+            info "Note: API calls go directly to GitHub (no proxy needed)"
+            info "If this fails, your network may not be able to reach api.github.com"
+        fi
         exit 1
     }
 
@@ -199,9 +228,10 @@ download_binary() {
     local version="$1"
     local platform="$2"
     local filename="claude-${version}-${platform}"
+    local raw_url="${_GITHUB_DL}/${GITHUB_REPO}/releases/download/v${version}/${filename}"
     local download_url
 
-    download_url=$(build_url "${_GITHUB_DL}/${GITHUB_REPO}/releases/download/v${version}/${filename}")
+    download_url=$(proxy_download_url "$raw_url")
 
     info "Downloading Claude Code v${version} for ${platform}..."
     info "URL: ${download_url}"
@@ -220,6 +250,8 @@ download_binary() {
         error "  - Network connectivity issues"
         if [ "$USE_PROXY" = false ]; then
             error "  - If you are in China mainland, try: --proxy"
+        else
+            error "  - Try a different mirror: --mirror https://ghfast.top"
         fi
         exit 1
     fi
@@ -232,8 +264,9 @@ verify_checksum() {
     local version="$2"
     local platform="$3"
 
+    local raw_url="${_GITHUB_DL}/${GITHUB_REPO}/releases/download/v${version}/SHA256SUMS.txt"
     local checksums_url
-    checksums_url=$(build_url "${_GITHUB_DL}/${GITHUB_REPO}/releases/download/v${version}/SHA256SUMS.txt")
+    checksums_url=$(proxy_download_url "$raw_url")
 
     info "Verifying checksum..."
     local checksums
@@ -344,7 +377,7 @@ main() {
     auto_detect_china
 
     if [ "$USE_PROXY" = true ]; then
-        info "Proxy mode enabled: using gh-proxy.org for acceleration"
+        info "Download proxy: ${PROXY_URL}"
     fi
 
     # Detect platform
