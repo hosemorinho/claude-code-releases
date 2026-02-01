@@ -240,7 +240,7 @@ download_binary() {
     tmp_dir=$(mktemp -d)
     local tmp_file="${tmp_dir}/claude"
 
-    if ! curl -fSL --progress-bar "$download_url" -o "$tmp_file" 2>&1; then
+    if ! curl -fSL --progress-bar "$download_url" -o "$tmp_file"; then
         rm -rf "$tmp_dir"
         error "Failed to download binary"
         error "URL: $download_url"
