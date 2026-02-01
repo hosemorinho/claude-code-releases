@@ -24,9 +24,9 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-info()    { echo -e "${CYAN}[INFO]${NC} $*"; }
-success() { echo -e "${GREEN}[OK]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+info()    { echo -e "${CYAN}[INFO]${NC} $*" >&2; }
+success() { echo -e "${GREEN}[OK]${NC} $*" >&2; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
 error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 USE_PROXY=false
