@@ -156,7 +156,12 @@ auto_detect_china() {
 build_url() {
     local url="$1"
     if [ "$USE_PROXY" = true ]; then
-        echo "https://gh-proxy.org/${url}"
+        # Avoid double-proxying if URL already contains proxy
+        if [[ "$url" != *"gh-proxy.org"* ]]; then
+            echo "https://gh-proxy.org/${url}"
+        else
+            echo "$url"
+        fi
     else
         echo "$url"
     fi
