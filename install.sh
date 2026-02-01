@@ -228,7 +228,8 @@ download_binary() {
     local version="$1"
     local platform="$2"
     local filename="claude-${version}-${platform}"
-    local raw_url="${_GITHUB_DL}/${GITHUB_REPO}/releases/download/v${version}/${filename}"
+    local archive_name="${filename}.tar.gz"
+    local raw_url="${_GITHUB_DL}/${GITHUB_REPO}/releases/download/v${version}/${archive_name}"
     local download_url
 
     download_url=$(proxy_download_url "$raw_url")
@@ -237,11 +238,12 @@ download_binary() {
     info "URL: ${download_url}"
 
     BINARY_TMP_DIR=$(mktemp -d)
+    BINARY_ARCHIVE_FILE="${BINARY_TMP_DIR}/${archive_name}"
     BINARY_TMP_FILE="${BINARY_TMP_DIR}/claude"
 
-    if ! curl -fSL --progress-bar "$download_url" -o "$BINARY_TMP_FILE"; then
+    if ! curl -fSL --progress-bar "$download_url" -o "$BINARY_ARCHIVE_FILE"; then
         rm -rf "$BINARY_TMP_DIR"
-        error "Failed to download binary"
+        error "Failed to download binary archive"
         error "URL: $download_url"
         error ""
         error "Possible reasons:"
@@ -256,8 +258,31 @@ download_binary() {
     fi
 }
 
+extract_binary() {
+    local version="$1"
+    local platform="$2"
+    local filename="claude-${version}-${platform}"
+
+    info "Extracting archive..."
+    if ! tar -xzf "$BINARY_ARCHIVE_FILE" -C "$BINARY_TMP_DIR"; then
+        rm -rf "$BINARY_TMP_DIR"
+        error "Failed to extract archive"
+        exit 1
+    fi
+
+    # Move extracted binary to expected location
+    if [ -f "${BINARY_TMP_DIR}/${filename}" ]; then
+        mv "${BINARY_TMP_DIR}/${filename}" "$BINARY_TMP_FILE"
+    else
+        error "Binary not found in archive: ${filename}"
+        exit 1
+    fi
+
+    rm -f "$BINARY_ARCHIVE_FILE"
+}
+
 verify_checksum() {
-    local binary_path="$1"
+    local archive_path="$1"
     local version="$2"
     local platform="$3"
 
@@ -272,20 +297,20 @@ verify_checksum() {
         return 0
     }
 
-    local filename="claude-${version}-${platform}"
+    local archive_name="claude-${version}-${platform}.tar.gz"
     local expected
-    expected=$(echo "$checksums" | grep " ${filename}\$" | awk '{print $1}' | head -1)
+    expected=$(echo "$checksums" | grep " ${archive_name}\$" | awk '{print $1}' | head -1)
 
     if [ -z "$expected" ]; then
-        warn "No checksum found for $filename, skipping verification"
+        warn "No checksum found for $archive_name, skipping verification"
         return 0
     fi
 
     local actual
     if command -v sha256sum &>/dev/null; then
-        actual=$(sha256sum "$binary_path" | awk '{print $1}')
+        actual=$(sha256sum "$archive_path" | awk '{print $1}')
     elif command -v shasum &>/dev/null; then
-        actual=$(shasum -a 256 "$binary_path" | awk '{print $1}')
+        actual=$(shasum -a 256 "$archive_path" | awk '{print $1}')
     else
         warn "No sha256sum or shasum available, skipping verification"
         return 0
@@ -399,7 +424,10 @@ main() {
     download_binary "$version" "$platform"
 
     # Verify
-    verify_checksum "$BINARY_TMP_FILE" "$version" "$platform"
+    verify_checksum "$BINARY_ARCHIVE_FILE" "$version" "$platform"
+
+    # Extract
+    extract_binary "$version" "$platform"
 
     # Install
     install_binary "$BINARY_TMP_FILE"

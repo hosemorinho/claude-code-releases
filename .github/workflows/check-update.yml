@@ -129,11 +129,34 @@ jobs:
           echo "Downloaded binaries:"
           ls -lh binaries/
 
+      - name: Compress binaries
+        if: steps.should_proceed.outputs.proceed == 'true'
+        run: |
+          VERSION="${{ steps.check_version.outputs.latest_version }}"
+          cd binaries
+
+          echo "Compressing binaries..."
+          for file in claude-*; do
+            if [ -f "$file" ]; then
+              ORIGINAL_SIZE=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
+              tar -czf "${file}.tar.gz" "$file"
+              COMPRESSED_SIZE=$(stat -c%s "${file}.tar.gz" 2>/dev/null || stat -f%z "${file}.tar.gz" 2>/dev/null)
+              RATIO=$((100 - (COMPRESSED_SIZE * 100 / ORIGINAL_SIZE)))
+              echo "  ${file}.tar.gz (${COMPRESSED_SIZE} bytes, saved ${RATIO}%)"
+              rm "$file"  # Remove uncompressed binary
+            fi
+          done
+
+          echo ""
+          echo "Compressed files:"
+          ls -lh
+          cd ..
+
       - name: Generate checksums file
         if: steps.should_proceed.outputs.proceed == 'true'
         run: |
           cd binaries
-          sha256sum claude-* > SHA256SUMS.txt
+          sha256sum claude-*.tar.gz > SHA256SUMS.txt
           echo "Generated checksums:"
           cat SHA256SUMS.txt
           cd ..
@@ -148,16 +171,18 @@ jobs:
 
           Automatically synced from upstream Claude Code release.
 
+          **Note:** All binaries are compressed with gzip for faster downloads. The install script automatically extracts them.
+
           ### Supported Platforms
 
           | Platform | Architecture | File |
           |----------|-------------|------|
-          | macOS | x64 (Intel) | `claude-${VERSION}-darwin-x64` |
-          | macOS | arm64 (Apple Silicon) | `claude-${VERSION}-darwin-arm64` |
-          | Linux | x64 (glibc) | `claude-${VERSION}-linux-x64` |
-          | Linux | arm64 (glibc) | `claude-${VERSION}-linux-arm64` |
-          | Linux | x64 (musl/Alpine) | `claude-${VERSION}-linux-x64-musl` |
-          | Linux | arm64 (musl/Alpine) | `claude-${VERSION}-linux-arm64-musl` |
+          | macOS | x64 (Intel) | `claude-${VERSION}-darwin-x64.tar.gz` |
+          | macOS | arm64 (Apple Silicon) | `claude-${VERSION}-darwin-arm64.tar.gz` |
+          | Linux | x64 (glibc) | `claude-${VERSION}-linux-x64.tar.gz` |
+          | Linux | arm64 (glibc) | `claude-${VERSION}-linux-arm64.tar.gz` |
+          | Linux | x64 (musl/Alpine) | `claude-${VERSION}-linux-x64-musl.tar.gz` |
+          | Linux | arm64 (musl/Alpine) | `claude-${VERSION}-linux-arm64-musl.tar.gz` |
 
           ### Quick Install
 
