@@ -10,6 +10,11 @@ set -euo pipefail
 # ============================================================
 GITHUB_REPO="hosemorinho/claude-code-releases"
 INSTALL_DIR="${CLAUDE_INSTALL_DIR:-$HOME/.local/bin}"
+# Build base URLs from parts to prevent gh-proxy.org from
+# rewriting them when serving this script through the proxy
+_GH="github"
+_GITHUB_API="https://api.${_GH}.com"
+_GITHUB_DL="https://${_GH}.com"
 # ============================================================
 
 RED='\033[0;31m'
@@ -169,7 +174,7 @@ build_url() {
 
 get_latest_version() {
     local api_url
-    api_url=$(build_url "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
+    api_url=$(build_url "${_GITHUB_API}/repos/${GITHUB_REPO}/releases/latest")
 
     info "Fetching latest version info..."
     local response
@@ -196,7 +201,7 @@ download_binary() {
     local filename="claude-${version}-${platform}"
     local download_url
 
-    download_url=$(build_url "https://github.com/${GITHUB_REPO}/releases/download/v${version}/${filename}")
+    download_url=$(build_url "${_GITHUB_DL}/${GITHUB_REPO}/releases/download/v${version}/${filename}")
 
     info "Downloading Claude Code v${version} for ${platform}..."
     info "URL: ${download_url}"
@@ -228,7 +233,7 @@ verify_checksum() {
     local platform="$3"
 
     local checksums_url
-    checksums_url=$(build_url "https://github.com/${GITHUB_REPO}/releases/download/v${version}/SHA256SUMS.txt")
+    checksums_url=$(build_url "${_GITHUB_DL}/${GITHUB_REPO}/releases/download/v${version}/SHA256SUMS.txt")
 
     info "Verifying checksum..."
     local checksums
