@@ -274,7 +274,7 @@ verify_checksum() {
 
     local filename="claude-${version}-${platform}"
     local expected
-    expected=$(echo "$checksums" | grep "$filename" | awk '{print $1}')
+    expected=$(echo "$checksums" | grep -F " ${filename}$" | awk '{print $1}' | head -1)
 
     if [ -z "$expected" ]; then
         warn "No checksum found for $filename, skipping verification"
