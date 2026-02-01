@@ -236,12 +236,11 @@ download_binary() {
     info "Downloading Claude Code v${version} for ${platform}..."
     info "URL: ${download_url}"
 
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-    local tmp_file="${tmp_dir}/claude"
+    BINARY_TMP_DIR=$(mktemp -d)
+    BINARY_TMP_FILE="${BINARY_TMP_DIR}/claude"
 
-    if ! curl -fSL --progress-bar "$download_url" -o "$tmp_file"; then
-        rm -rf "$tmp_dir"
+    if ! curl -fSL --progress-bar "$download_url" -o "$BINARY_TMP_FILE"; then
+        rm -rf "$BINARY_TMP_DIR"
         error "Failed to download binary"
         error "URL: $download_url"
         error ""
@@ -255,8 +254,6 @@ download_binary() {
         fi
         exit 1
     fi
-
-    echo "$tmp_file"
 }
 
 verify_checksum() {
@@ -399,22 +396,19 @@ main() {
     fi
 
     # Download
-    local binary_path
-    binary_path=$(download_binary "$version" "$platform")
+    download_binary "$version" "$platform"
 
     # Verify
-    verify_checksum "$binary_path" "$version" "$platform"
+    verify_checksum "$BINARY_TMP_FILE" "$version" "$platform"
 
     # Install
-    install_binary "$binary_path"
+    install_binary "$BINARY_TMP_FILE"
 
     # Ensure PATH
     ensure_path
 
     # Cleanup temp directory
-    local tmp_dir
-    tmp_dir=$(dirname "$binary_path")
-    rm -rf "$tmp_dir" 2>/dev/null || true
+    rm -rf "$BINARY_TMP_DIR" 2>/dev/null || true
 
     echo ""
     success "Claude Code v${version} installed successfully!"
