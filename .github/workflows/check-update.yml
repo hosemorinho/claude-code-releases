@@ -1,0 +1,201 @@
+name: Check Claude Code Update
+
+on:
+  schedule:
+    # Run daily at 08:00 UTC
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force release even if version already exists'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  GCS_BUCKET: "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get latest Claude Code version
+        id: check_version
+        run: |
+          LATEST_VERSION=$(curl -fsSL "${GCS_BUCKET}/latest" 2>/dev/null | tr -d '[:space:]')
+          if [ -z "$LATEST_VERSION" ]; then
+            echo "Failed to fetch latest version"
+            exit 1
+          fi
+          echo "latest_version=$LATEST_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Latest Claude Code version: $LATEST_VERSION"
+
+      - name: Check if release already exists
+        id: check_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.check_version.outputs.latest_version }}"
+          if gh release view "v${VERSION}" > /dev/null 2>&1; then
+            echo "Release v${VERSION} already exists"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release v${VERSION} does not exist, will create"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide whether to proceed
+        id: should_proceed
+        run: |
+          if [ "${{ steps.check_release.outputs.exists }}" = "true" ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping: release already exists and force is not set"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download manifest
+        if: steps.should_proceed.outputs.proceed == 'true'
+        id: manifest
+        run: |
+          VERSION="${{ steps.check_version.outputs.latest_version }}"
+          MANIFEST_URL="${GCS_BUCKET}/${VERSION}/manifest.json"
+          echo "Downloading manifest from: $MANIFEST_URL"
+          curl -fsSL "$MANIFEST_URL" -o manifest.json
+          cat manifest.json | python3 -m json.tool
+          echo "manifest_downloaded=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download binaries for all platforms
+        if: steps.should_proceed.outputs.proceed == 'true'
+        run: |
+          VERSION="${{ steps.check_version.outputs.latest_version }}"
+          PLATFORMS=(
+            "darwin-x64"
+            "darwin-arm64"
+            "linux-x64"
+            "linux-arm64"
+            "linux-x64-musl"
+            "linux-arm64-musl"
+          )
+
+          mkdir -p binaries
+
+          for platform in "${PLATFORMS[@]}"; do
+            echo "========================================="
+            echo "Downloading binary for: $platform"
+            echo "========================================="
+            BINARY_URL="${GCS_BUCKET}/${VERSION}/${platform}/claude"
+            OUTPUT_FILE="binaries/claude-${VERSION}-${platform}"
+
+            if curl -fsSL "$BINARY_URL" -o "$OUTPUT_FILE" 2>/dev/null; then
+              chmod +x "$OUTPUT_FILE"
+              FILE_SIZE=$(stat -c%s "$OUTPUT_FILE" 2>/dev/null || stat -f%z "$OUTPUT_FILE" 2>/dev/null)
+              echo "Downloaded: $OUTPUT_FILE (${FILE_SIZE} bytes)"
+
+              # Verify checksum from manifest
+              EXPECTED_SHA256=$(python3 -c "
+          import json
+          with open('manifest.json') as f:
+              m = json.load(f)
+          platforms = m.get('platforms', {})
+          p = platforms.get('${platform}', {})
+          print(p.get('checksum', ''))
+          " 2>/dev/null)
+
+              if [ -n "$EXPECTED_SHA256" ]; then
+                ACTUAL_SHA256=$(sha256sum "$OUTPUT_FILE" | awk '{print $1}')
+                if [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ]; then
+                  echo "Checksum verified for $platform"
+                else
+                  echo "WARNING: Checksum mismatch for $platform"
+                  echo "  Expected: $EXPECTED_SHA256"
+                  echo "  Actual:   $ACTUAL_SHA256"
+                fi
+              else
+                echo "No checksum found in manifest for $platform, skipping verification"
+              fi
+            else
+              echo "WARNING: Failed to download binary for $platform (may not be available)"
+            fi
+          done
+
+          echo ""
+          echo "Downloaded binaries:"
+          ls -lh binaries/
+
+      - name: Generate checksums file
+        if: steps.should_proceed.outputs.proceed == 'true'
+        run: |
+          cd binaries
+          sha256sum claude-* > SHA256SUMS.txt
+          echo "Generated checksums:"
+          cat SHA256SUMS.txt
+          cd ..
+
+      - name: Generate release notes
+        if: steps.should_proceed.outputs.proceed == 'true'
+        id: release_notes
+        run: |
+          VERSION="${{ steps.check_version.outputs.latest_version }}"
+          cat > release_notes.md << 'NOTES_EOF'
+          ## Claude Code v${VERSION}
+
+          Automatically synced from upstream Claude Code release.
+
+          ### Supported Platforms
+
+          | Platform | Architecture | File |
+          |----------|-------------|------|
+          | macOS | x64 (Intel) | `claude-${VERSION}-darwin-x64` |
+          | macOS | arm64 (Apple Silicon) | `claude-${VERSION}-darwin-arm64` |
+          | Linux | x64 (glibc) | `claude-${VERSION}-linux-x64` |
+          | Linux | arm64 (glibc) | `claude-${VERSION}-linux-arm64` |
+          | Linux | x64 (musl/Alpine) | `claude-${VERSION}-linux-x64-musl` |
+          | Linux | arm64 (musl/Alpine) | `claude-${VERSION}-linux-arm64-musl` |
+
+          ### Quick Install
+
+          **Global users:**
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+          ```
+
+          **China mainland users (accelerated):**
+          ```bash
+          curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash -s -- --proxy
+          ```
+
+          ### Checksum Verification
+
+          Download `SHA256SUMS.txt` from the release assets to verify binary integrity.
+          NOTES_EOF
+
+          # Replace ${VERSION} placeholder
+          sed -i "s/\${VERSION}/${VERSION}/g" release_notes.md
+
+      - name: Create GitHub Release
+        if: steps.should_proceed.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.check_version.outputs.latest_version }}"
+
+          # Delete existing release if force mode
+          if [ "${{ inputs.force }}" = "true" ]; then
+            gh release delete "v${VERSION}" --yes 2>/dev/null || true
+            git push --delete origin "v${VERSION}" 2>/dev/null || true
+          fi
+
+          gh release create "v${VERSION}" \
+            --title "Claude Code v${VERSION}" \
+            --notes-file release_notes.md \
+            binaries/claude-* \
+            binaries/SHA256SUMS.txt
+
+          echo "Release v${VERSION} created successfully!"

@@ -1,0 +1,3 @@
+binaries/
+*.tmp
+.DS_Store
